@@ -1,0 +1,3 @@
+= OpenCensus Jaeger Vert.x Demo
+
+This is a simple Vert.x application composed of one verticle and two web servers: one says "World" and one says "Hello %s", where "%s" is the answer from the second server.
