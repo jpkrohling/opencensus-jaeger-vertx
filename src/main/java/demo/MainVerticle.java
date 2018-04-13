@@ -6,14 +6,19 @@ import org.slf4j.LoggerFactory;
 import io.opencensus.common.Scope;
 import io.opencensus.exporter.trace.jaeger.JaegerTraceExporter;
 import io.opencensus.exporter.trace.logging.LoggingTraceExporter;
+import io.opencensus.trace.Span;
+import io.opencensus.trace.SpanContext;
 import io.opencensus.trace.Tracer;
 import io.opencensus.trace.Tracing;
+import io.opencensus.trace.propagation.SpanContextParseException;
+import io.opencensus.trace.propagation.TextFormat;
 import io.opencensus.trace.samplers.Samplers;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpMethod;
+import io.vertx.core.http.HttpServerRequest;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.client.HttpRequest;
@@ -29,6 +34,18 @@ public class MainVerticle extends AbstractVerticle {
     private int secondPort = -1;
 
     private static final Tracer tracer = Tracing.getTracer();
+
+    private static final TextFormat textFormat = Tracing.getPropagationComponent().getB3Format();
+    private static final TextFormat.Setter<HttpRequest<Buffer>> SETTER = new TextFormat.Setter<HttpRequest<Buffer>>() {
+        public void put(HttpRequest<Buffer> carrier, String key, String value) {
+            carrier.headers().add(key, value);
+        }
+    };
+    private static final TextFormat.Getter<HttpServerRequest> GETTER = new TextFormat.Getter<HttpServerRequest>() {
+        public String get(HttpServerRequest carrier, String key) {
+            return carrier.headers().get(key);
+        }
+    };
 
     public static void main(String[] args) {
         logger.warn("Bootstrapping from the main method. For production purposes, use the Vert.x launcher");
@@ -51,8 +68,10 @@ public class MainVerticle extends AbstractVerticle {
         logger.info("Starting the First HTTP server");
 
         httpServer(firstPort, (event) -> {
-            try (Scope ignored = tracer.spanBuilder("first").setRecordEvents(true).setSampler(Samplers.alwaysSample()).startScopedSpan()) {
+            Span span = tracer.spanBuilder("first").setRecordEvents(true).setSampler(Samplers.alwaysSample()).startSpan();
+            try (Scope ignored = tracer.withSpan(span)) {
                 HttpRequest<Buffer> b = WebClient.create(vertx).get(secondPort, "localhost", "/");
+                textFormat.inject(span.getContext(), b, SETTER);
 
                 b.send(ar -> {
                     if (ar.succeeded()) {
@@ -71,8 +90,15 @@ public class MainVerticle extends AbstractVerticle {
         logger.info("Starting the Second HTTP server");
 
         httpServer(secondPort, (event) -> {
-            try (Scope ignored = tracer.spanBuilder("second").setRecordEvents(true).setSampler(Samplers.alwaysSample()).startScopedSpan()) {
-                event.response().setStatusCode(200).end("World");
+            try {
+                SpanContext spanContext = textFormat.extract(event.request(), GETTER);
+                Span span = tracer.spanBuilderWithRemoteParent("second", spanContext).setRecordEvents(true).setSampler(Samplers.alwaysSample()).startSpan();
+                try (Scope ignored = tracer.withSpan(span)) {
+                    event.response().setStatusCode(200).end("World");
+                }
+            } catch (SpanContextParseException e) {
+                logger.error(e.getMessage(), e);
+                event.response().setStatusCode(500).end();
             }
         });
     }
