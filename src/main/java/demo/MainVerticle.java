@@ -10,12 +10,13 @@ import io.opencensus.trace.Tracer;
 import io.opencensus.trace.Tracing;
 import io.opencensus.trace.samplers.Samplers;
 import io.vertx.core.AbstractVerticle;
-import io.vertx.core.buffer.Buffer;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
+import io.vertx.ext.web.client.HttpRequest;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 
@@ -28,7 +29,7 @@ public class MainVerticle extends AbstractVerticle {
     private int secondPort = -1;
 
     private static final Tracer tracer = Tracing.getTracer();
-    
+
     public static void main(String[] args) {
         logger.warn("Bootstrapping from the main method. For production purposes, use the Vert.x launcher");
         Vertx.vertx().deployVerticle(new MainVerticle());
@@ -50,9 +51,10 @@ public class MainVerticle extends AbstractVerticle {
         logger.info("Starting the First HTTP server");
 
         httpServer(firstPort, (event) -> {
-            try (Scope ss = tracer.spanBuilder("first").setRecordEvents(true).setSampler(Samplers.alwaysSample()).startScopedSpan()) {
-                // TODO: propagate the context to the second server
-                WebClient.create(vertx).get(secondPort, "localhost", "/").send(ar -> {
+            try (Scope ignored = tracer.spanBuilder("first").setRecordEvents(true).setSampler(Samplers.alwaysSample()).startScopedSpan()) {
+                HttpRequest<Buffer> b = WebClient.create(vertx).get(secondPort, "localhost", "/");
+
+                b.send(ar -> {
                     if (ar.succeeded()) {
                         HttpResponse<Buffer> response = ar.result();
                         String who = response.body().toString();
@@ -69,7 +71,7 @@ public class MainVerticle extends AbstractVerticle {
         logger.info("Starting the Second HTTP server");
 
         httpServer(secondPort, (event) -> {
-            try (Scope ss = tracer.spanBuilder("second").setRecordEvents(true).setSampler(Samplers.alwaysSample()).startScopedSpan()) {
+            try (Scope ignored = tracer.spanBuilder("second").setRecordEvents(true).setSampler(Samplers.alwaysSample()).startScopedSpan()) {
                 event.response().setStatusCode(200).end("World");
             }
         });
